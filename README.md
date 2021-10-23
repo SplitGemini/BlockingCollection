@@ -1,4 +1,5 @@
 # BlockingCollection
+
 BlockingCollection is a C++11 thread safe collection class that provides the following features:
 - Modeled after .NET BlockingCollection class. 
 - Implementation of classic Producer/Consumer pattern (i.e. condition variable, mutex);   
@@ -7,6 +8,7 @@ BlockingCollection is a C++11 thread safe collection class that provides the fol
 - Insertion and removal operations that block when collection is empty or full.
 - Insertion and removal "try" operations that do not block or that block up to a specified period of time.
 - Insertion and removal 'bulk" operations that allow more than one element to be added or taken at once. 
+- Random access index of collection item.
 - Priority-based insertion and removal operations. 
 - Encapsulates any collection type that satisfy the ProducerConsumerCollection requirement.
 - [Minimizes](#performance-optimizations) sleeps, wake ups and lock contention by managing an active subset of producer and consumer threads.
@@ -17,7 +19,7 @@ BlockingCollection is a C++11 thread safe collection class that provides the fol
 BlockingCollection<T> supports bounding and blocking. Bounding means that you can set the maximum capacity
 of the collection. Bounding is important in certain scenarios because it enables you to control the maximum
 size of the collection in memory, and it prevents the producing threads from moving too far ahead of the consuming threads. 
-  
+
 Multiple threads or tasks can add elements to the collection, and if the collection reaches its specified maximum capacity, the producing threads will block until an element is removed. Multiple consumers can remove elements, and if the collection becomes empty, the consuming threads will block until a producer adds an item. A producing thread can call the complete_adding method to indicate that no more elements will be added. Consumers monitor the is_completed property to know when the collection is empty and no more elements will be added. The following example shows a simple BlockingCollection with a bounded capacity of 100. A producer task adds items to the collection as long as some external condition is true, and then calls complete_adding. The consumer task takes items until the is_completed property is true.  
 ```C++
 // A bounded collection. It can hold no more 
@@ -55,13 +57,92 @@ std::thread producer_thread([&collection]() {
       
       // blocks if collection.size() == collection.bounded_capacity()
       collection.add(data);
+      
+      // return immediately if collection is full
+      collection.try_add(data);
+      
+      // add with timeout
+      collection.try_add(data, std::chrono::milliseconds(1000));
+          
+	  // emplace several rvalue
+      collection.try_emplace(GetData(data), GetData(data));
+          
+      // emplace several rvalue with timeout
+      collection.try_emplace(std::chrono::milliseconds(1000), GetData(data), GetData(data));
   }
   
   // let consumer know we are done
   collection.complete_adding();
 });
 ```
+## Random Access "at"
+
+```C++
+// A bounded collection. It can hold no more 
+// than 100 items at once.
+BlockingCollection<Data*> collection(100);
+
+// a simple blocking consumer
+std::thread consumer_thread([&collection]() {
+
+  while (!collection.is_completed())
+  {
+      Data* data;
+      
+      // fetch will block if there is no data at index 0
+      auto status = collection.at(data, 0);
+      
+      // fetch the item of index 0, if no data return immediately
+      auto status = collection.try_at(data, 0);
+      // fetch the item of index with timeout
+      auto status = collection.try_at(data, 0, std::chrono::milliseconds(1000));
+      
+      if(status == BlockingCollectionStatus::Ok)
+      {
+          process(data);
+      }
+  }
+});
+
+// a simple blocking producer
+std::thread producer_thread([&collection]() {
+
+  while (moreItemsToAdd)
+  {
+      Data* data = GetData(data);
+      
+      // blocks if collection.size() == collection.bounded_capacity()
+      collection.add(data);
+  }
+  
+  // let consumer know we are done
+  collection.complete_adding();
+});
+```
+## History Size
+Grand total count added to collection
+```C++
+// A bounded collection. It can hold no more 
+// than 100 items at once.
+BlockingCollection<Data*> collection(100);
+
+Data *data;
+collection.add(GetData());
+collection.take(data);
+
+collection.add(GetData());
+
+// will be 1
+auto size = collection.size();
+
+// will be 2
+auto history_size = collection.history_size();
+
+// set both to 0
+collection.flush();
+```
 ## Timed Blocking Operations
+
 In timed blocking try_add and try_take operations on bounded collections, the method tries to add or take an item. If an item is available it is placed into the variable that was passed in by reference, and the method returns Ok. If no item is retrieved after a specified time-out period the method returns TimedOut. The thread is then free to do some other useful work before trying again to access the collection.
 ```C++
   BlockingCollection<Data*> collection(100);
@@ -157,7 +238,7 @@ std::thread consumer_thread([&collection]() {
 ## ProducerConsumerCollection Requirement  
 In order for a container to be used with the BlockingCollection<T> it must meet the ProducerConsumerCollection requirement.
 The ProducerConsumerCollection requires that all the following method signatures must be supported:
-  
+
 - size_type size()
 - bool try_add(const value_type& element)
 - bool try_add(value_type&& element)
@@ -234,7 +315,7 @@ std::thread consumer_thread([&collection]() {
 ```
 ### Consumer & Producer Guards
 In order to mitigate forgetting to attach or detach from a BlockingCollection the BlockingCollection Guard classes (i.e. ProducerGuard<T> and ConsumerGuard<T>) can be used for this purpose. Both Guard classes are a RAII-style mechanism for attaching a thread to the BlockingCollection and detaching it when the thread terminates. As well as in exception scenarios.
-  
+
 In the following examples, ConsumerGuard and ProducerGuard automatically attach and detach the std::threads to the BlockingCollection.
 ```C++
 BlockingCollection<int> collection;
