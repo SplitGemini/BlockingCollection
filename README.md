@@ -53,7 +53,7 @@ std::thread producer_thread([&collection]() {
 
   while (moreItemsToAdd)
   {
-      Data* data = GetData(data);
+      Data* data = GetData();
       
       // blocks if collection.size() == collection.bounded_capacity()
       collection.add(data);
@@ -65,10 +65,10 @@ std::thread producer_thread([&collection]() {
       collection.try_add(data, std::chrono::milliseconds(1000));
           
 	  // emplace several rvalue
-      collection.try_emplace(GetData(data), GetData(data));
+      collection.try_emplace(arg...);
           
       // emplace several rvalue with timeout
-      collection.try_emplace(std::chrono::milliseconds(1000), GetData(data), GetData(data));
+      collection.try_emplace_timed(std::chrono::milliseconds(1000), arg...);
   }
   
   // let consumer know we are done
@@ -93,9 +93,9 @@ std::thread consumer_thread([&collection]() {
       auto status = collection.at(data, 0);
       
       // fetch the item of index 0, if no data return immediately
-      auto status = collection.try_at(data, 0);
+      status = collection.try_at(data, 0);
       // fetch the item of index with timeout
-      auto status = collection.try_at(data, 0, std::chrono::milliseconds(1000));
+      status = collection.try_at(data, 0, std::chrono::milliseconds(1000));
       
       if(status == BlockingCollectionStatus::Ok)
       {

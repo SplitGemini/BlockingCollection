@@ -377,8 +377,8 @@ public:
     /// @returns True if the element was fetched successfully; otherwise,
     /// false.
     bool try_at(value_type &item, std::size_t index) {
-        // get an index exceed capacity
-        if (index >= bounded_capacity_) return false;
+        // get an index exceed size
+        if (index >= container_.size()) return false;
         item = container_.at(index);
         return true;
     }
@@ -424,6 +424,9 @@ public:
         if (container_.size() == bounded_capacity_) return false;
         return try_emplace_i<Args...>(std::forward<Args>(args)..., is_queue<ContainerType>());
     }
+
+    /// clear container
+    void clear() { container_.clear(); }
 
 private:
     size_t         bounded_capacity_;
@@ -495,6 +498,8 @@ enum class BlockingCollectionStatus {
     InvalidIterators = -5,
     /// Operation failed due to concurrent Add and CompleteAdding
     CompleteAddingConcurrent = -6,
+    // At operation index exceed max capacity
+    AtExceedCapacity = -7,
     /// Operation failed due to BlockingCollection Container error
     InternalError = -8
 };
@@ -647,9 +652,7 @@ public:
 
         auto itemsFlushed = container_.size();
 
-        T item;
-
-        while (container_.size() > 0) { container_.try_take(item); }
+        container_.clear();
 
         not_empty_condition_var_.size(0);
         not_full_condition_var_.size(0);
@@ -756,7 +759,7 @@ public:
     /// @return A BlockCollectionStatus code.
     /// @see BlockingCollectionStatus
     BlockingCollectionStatus add(const T &value) {
-        return try_emplace(std::chrono::milliseconds(-1), value);
+        return try_emplace_timed(std::chrono::milliseconds(-1), value);
     }
 
     /// Adds the given element value to the BlockingCollection<T>.
@@ -769,7 +772,7 @@ public:
     /// @return A BlockCollectionStatus code.
     /// @see BlockingCollectionStatus
     BlockingCollectionStatus add(T &&value) {
-        return try_emplace(std::chrono::milliseconds(-1), std::forward<T>(value));
+        return try_emplace_timed(std::chrono::milliseconds(-1), std::forward<T>(value));
     }
 
     /// Tries to add the given element value to the BlockingCollection<T>.
@@ -780,7 +783,7 @@ public:
     /// @return A BlockCollectionStatus code.
     /// @see BlockingCollectionStatus
     BlockingCollectionStatus try_add(const T &value) {
-        return try_emplace(std::chrono::milliseconds::zero(), value);
+        return try_emplace_timed(std::chrono::milliseconds::zero(), value);
     }
 
     /// Tries to add the given element value to the BlockingCollection<T>.
@@ -789,7 +792,7 @@ public:
     /// method immediately returns without adding the item.
     /// @param value the value of the element to try to add
     BlockingCollectionStatus try_add(T &&value) {
-        return try_emplace(std::chrono::milliseconds::zero(), std::forward<T>(value));
+        return try_emplace_timed(std::chrono::milliseconds::zero(), std::forward<T>(value));
     }
 
     /// Tries to add the given element value to the BlockingCollection<T>
@@ -806,7 +809,7 @@ public:
         typename = typename std::enable_if<std::is_same<T, typename std::decay<U>::type>::value>>
     BlockingCollectionStatus try_add(U &&                                      value,
                                      const std::chrono::duration<Rep, Period> &rel_time) {
-        return try_emplace(rel_time, std::forward<U>(value));
+        return try_emplace_timed(rel_time, std::forward<U>(value));
     }
 
     /// Adds new element to the BlockingCollection<T>.
@@ -820,7 +823,7 @@ public:
     /// @see BlockingCollectionStatus
     template <typename... Args>
     BlockingCollectionStatus emplace(Args &&...args) {
-        return try_emplace(std::chrono::milliseconds(-1), std::forward<Args>(args)...);
+        return try_emplace_timed(std::chrono::milliseconds(-1), std::forward<Args>(args)...);
     }
 
     /// Tries to add new element to the BlockingCollection<T>.
@@ -834,14 +837,8 @@ public:
     /// @return A BlockCollectionStatus code.
     /// @see BlockingCollectionStatus
     template <typename... Args>
-    BlockingCollectionStatus try_emplace(T &&item, Args &&...args) {
-        return try_emplace(std::chrono::milliseconds::zero(), std::forward<T>(item),
-                           std::forward<Args>(args)...);
-    }
-    // add a left value
-    template <typename... Args>
-    BlockingCollectionStatus try_emplace(const T &item, Args &&...args) {
-        return try_emplace(std::chrono::milliseconds::zero(), item, std::forward<Args>(args)...);
+    BlockingCollectionStatus try_emplace(Args &&...args) {
+        return try_emplace_timed(std::chrono::milliseconds::zero(), std::forward<Args>(args)...);
     }
 
     /// Tries to add the given element value to the BlockingCollection<T>
@@ -857,8 +854,8 @@ public:
     /// @see BlockingCollectionStatus
     /// @see http://en.cppreference.com/w/cpp/chrono/duration
     template <class Rep, class Period, typename... Args>
-    BlockingCollectionStatus try_emplace(const std::chrono::duration<Rep, Period> &rel_time,
-                                         Args &&...args) {
+    BlockingCollectionStatus try_emplace_timed(const std::chrono::duration<Rep, Period> &rel_time,
+                                               Args &&...args) {
         {
             std::unique_lock<LockType> guard(lock_);
 
@@ -909,6 +906,8 @@ public:
     BlockingCollectionStatus try_at(T &item, std::size_t index,
                                     const std::chrono::duration<Rep, Period> &rel_time) {
         {
+            if (index >= bounded_capacity_) return BlockingCollectionStatus::AtExceedCapacity;
+
             std::unique_lock<LockType> guard(lock_);
 
             // wait for container size larger than index
